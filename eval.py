@@ -21,6 +21,18 @@ import pandas as pd
 SHARD = 6000
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_VAL_CSV = os.path.join(_HERE, "splits", "val_objids.csv")
+DEFAULT_TRAIN_CSV = os.path.join(_HERE, "splits", "train_objids.csv")
+
+
+def is_train_subset(train_csv, base_csv=DEFAULT_TRAIN_CSV):
+    """Check that every objid in `train_csv` is inside the canonical train split
+    (splits/train_objids.csv) — i.e. NONE leak into the held-out 50k val. Returns
+    {ok, n, n_outside_train, sample_outside}. Always call this before training on a custom subset."""
+    given = set(int(x) for x in pd.read_csv(train_csv)["objid"].values)
+    base = set(int(x) for x in pd.read_csv(base_csv)["objid"].values)
+    outside = given - base
+    return {"ok": len(outside) == 0, "n": len(given),
+            "n_outside_train": len(outside), "sample_outside": list(outside)[:5]}
 
 
 def default_preprocess(arr):
