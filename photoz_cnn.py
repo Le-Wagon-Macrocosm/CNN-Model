@@ -25,6 +25,18 @@ from eval import (SHARD, DEFAULT_TRAIN_CSV, is_train_subset, sigma_mad, outlier_
 
 MLFLOW_URI = "https://146-148-10-86.sslip.io"
 
+# input preprocessing mode (set env PREPROC before importing). All read pixels in nanomaggies.
+#   'zscore' (default, original): arcsinh + per-image per-channel standardization
+#            — optimization-friendly but DESTROYS absolute flux & cross-band color.
+#   'div'  : x / SCALE                       — linear unit rescale; keeps flux & color intact.
+#   'sqrt' : sign(x) * sqrt(|x| / SCALE)     — signed sqrt; compresses range, keeps sign & color.
+#   'p99'  : x / per-band p99                 — fixed per-band rescale so each band's p99 ~ 1
+#            (dataset-wide constants, not per-image; balances band scales).
+# 'div'/'sqrt'/'p99' do NOT subtract a per-image mean, so the flux zero-point survives.
+PREPROC = os.environ.get("PREPROC", "zscore")
+PREPROC_SCALE = float(os.environ.get("PREPROC_SCALE", 1000.0))
+BAND_P99 = [0.231, 0.865, 1.955, 2.949, 4.012]   # u,g,r,i,z 99th-pct over the 600k v3 sample
+
 
 # ============================== model ==============================
 def inception(x, f1, f3r, f3, f5r, f5, fp, name, reg=None):
@@ -65,8 +77,17 @@ def build_embedder(cnn):
 
 
 # ============================== pipeline ==============================
-def preprocess(x, y):                       # (B,H,W,5) -> arcsinh + per-image per-channel norm
-    x = tf.cast(x, tf.float32); x = tf.math.asinh(x)
+def preprocess(x, y):                       # (B,H,W,5) nanomaggies -> network input (see PREPROC)
+    x = tf.cast(x, tf.float32)
+    if PREPROC == "div":                    # 1. linear unit rescale (keeps flux & color)
+        return x / PREPROC_SCALE, y
+    if PREPROC == "sqrt":                   # 2. /SCALE then signed sqrt (keeps sign & color)
+        x = x / PREPROC_SCALE
+        return tf.sign(x) * tf.sqrt(tf.abs(x)), y
+    if PREPROC == "p99":                    # 3. fixed per-band /p99 (u,g,r,i,z), each band p99 ~ 1
+        return x / tf.constant(BAND_P99, tf.float32), y
+    # 'zscore' (default, original): arcsinh + per-image per-channel standardization
+    x = tf.math.asinh(x)
     m = tf.reduce_mean(x, axis=[1, 2], keepdims=True)
     s = tf.math.reduce_std(x, axis=[1, 2], keepdims=True) + 1e-6
     return (x - m) / s, y
