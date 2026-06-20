@@ -136,7 +136,7 @@ def load_into_ram(rows, crop, data_dir, z_all):
     """Center-crop + load these catalog rows into a float16 array in RAM (sequential per shard).
     -> X (n,crop,crop,5) float16, y = log1p(z) float32."""
     mm = ev._shard_mm(data_dir)
-    o = (64 - crop) // 2; rows = np.asarray(rows, np.int64)
+    o = (ev.SRC_SIZE - crop) // 2; rows = np.asarray(rows, np.int64)
     X = np.empty((len(rows), crop, crop, 5), np.float16)
     for s in np.unique(rows // SHARD):
         sel = np.where(rows // SHARD == s)[0]; rr = rows[sel] % SHARD; srt = np.argsort(rr)
@@ -164,16 +164,20 @@ class SigmaMadCallback(tf.keras.callbacks.Callback):
         print(f'  -> val sigma_MAD={sm:.4f}  outlier={out * 100:.1f}%')
 
 
-def setup_mlflow(token, uri=MLFLOW_URI, experiment='photoz-cnn'):
+def setup_mlflow(token=None, uri=None, experiment='photoz-cnn'):
+    # fall back to env vars, so setting $MLFLOW_TRACKING_TOKEN (or a Colab secret) is enough
+    token = token or os.environ.get('MLFLOW_TRACKING_TOKEN')
+    uri = uri or os.environ.get('MLFLOW_TRACKING_URI') or MLFLOW_URI
     if not token or 'PASTE' in token:
-        print('MLflow token not set -> training without logging')
+        print('MLflow token not set (pass mlflow_token=... or set $MLFLOW_TRACKING_TOKEN) '
+              '-> training without logging')
         return False
     import mlflow, mlflow.tensorflow
     os.environ['MLFLOW_TRACKING_URI'] = uri
     os.environ['MLFLOW_TRACKING_TOKEN'] = token
     mlflow.set_experiment(experiment)
     mlflow.tensorflow.autolog(log_models=True, log_datasets=False)
-    print('MLflow: logging to', uri)
+    print('MLflow: logging to', uri, '| experiment:', experiment)
     return True
 
 

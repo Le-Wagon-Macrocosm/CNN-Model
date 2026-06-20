@@ -20,6 +20,9 @@ import numpy as np
 import pandas as pd
 
 SHARD = 6000
+# on-disk cutout edge length: sample_v1 = 64, registered+cropped sample_v3 = 24.
+# Set env CUTOUT_SIZE=24 when training on v3.
+SRC_SIZE = int(os.environ.get("CUTOUT_SIZE", 64))
 OUTLIER_THR = 0.05
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_VAL_CSV = os.path.join(_HERE, "splits", "val_objids.csv")
@@ -102,7 +105,7 @@ def val_predictions(model, data_dir, val_csv=DEFAULT_VAL_CSV, catalog_path=None,
         raise RuntimeError("no val images available in data_dir — download the shards first")
 
     zt = z[val_idx].astype("float64")
-    off = (64 - crop) // 2
+    off = (SRC_SIZE - crop) // 2
     preds = np.empty(len(val_idx), dtype="float32")
     for k in range(0, len(val_idx), batch):
         bi = val_idx[k:k + batch]
