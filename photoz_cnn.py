@@ -21,21 +21,10 @@ from tensorflow.keras import regularizers
 
 import eval as ev
 from eval import (SHARD, DEFAULT_TRAIN_CSV, is_train_subset, sigma_mad, outlier_rate,
-                  evaluate, val_predictions, outliers_from_df)
+                  evaluate, val_predictions, outliers_from_df, BAND_P99, make_np_preprocess)
 
 MLFLOW_URI = "https://146-148-10-86.sslip.io"
 
-# input preprocessing mode (set env PREPROC before importing). All read pixels in nanomaggies.
-#   'zscore' (default, original): arcsinh + per-image per-channel standardization
-#            — optimization-friendly but DESTROYS absolute flux & cross-band color.
-#   'div'  : x / SCALE                       — linear unit rescale; keeps flux & color intact.
-#   'sqrt' : sign(x) * sqrt(|x| / SCALE)     — signed sqrt; compresses range, keeps sign & color.
-#   'p99'  : x / per-band p99                 — fixed per-band rescale so each band's p99 ~ 1
-#            (dataset-wide constants, not per-image; balances band scales).
-# 'div'/'sqrt'/'p99' do NOT subtract a per-image mean, so the flux zero-point survives.
-PREPROC = os.environ.get("PREPROC", "zscore")
-PREPROC_SCALE = float(os.environ.get("PREPROC_SCALE", 1000.0))
-BAND_P99 = [0.231, 0.865, 1.955, 2.949, 4.012]   # u,g,r,i,z 99th-pct over the 600k v3 sample
 
 
 # ============================== model ==============================
@@ -77,20 +66,33 @@ def build_embedder(cnn):
 
 
 # ============================== pipeline ==============================
-def preprocess(x, y):                       # (B,H,W,5) nanomaggies -> network input (see PREPROC)
-    x = tf.cast(x, tf.float32)
-    if PREPROC == "div":                    # 1. linear unit rescale (keeps flux & color)
-        return x / PREPROC_SCALE, y
-    if PREPROC == "sqrt":                   # 2. /SCALE then signed sqrt (keeps sign & color)
-        x = x / PREPROC_SCALE
-        return tf.sign(x) * tf.sqrt(tf.abs(x)), y
-    if PREPROC == "p99":                    # 3. fixed per-band /p99 (u,g,r,i,z), each band p99 ~ 1
-        return x / tf.constant(BAND_P99, tf.float32), y
-    # 'zscore' (default, original): arcsinh + per-image per-channel standardization
-    x = tf.math.asinh(x)
-    m = tf.reduce_mean(x, axis=[1, 2], keepdims=True)
-    s = tf.math.reduce_std(x, axis=[1, 2], keepdims=True) + 1e-6
-    return (x - m) / s, y
+def make_preprocess(mode="zscore", scale=1000.0):
+    """Return a tf.data map fn (x,y)->(x,y) for the given preprocessing mode. x is (B,H,W,5)
+    nanomaggies. Modes (mirror eval.make_np_preprocess so train & val match):
+      'zscore' arcsinh + per-image per-channel standardization (original; kills flux & color)
+      'div'    x / scale                    — linear unit rescale; keeps flux & color
+      'sqrt'   sign(x) * sqrt(|x| / scale)  — signed sqrt; compresses range, keeps sign & color
+      'p99'    x / per-band p99             — fixed per-band rescale, each band's p99 ~ 1
+    'div'/'sqrt'/'p99' don't subtract a per-image mean, so the flux zero-point (color) survives."""
+    p99 = tf.constant(BAND_P99, tf.float32)
+
+    def fn(x, y):
+        x = tf.cast(x, tf.float32)
+        if mode == "div":
+            return x / scale, y
+        if mode == "sqrt":
+            x = x / scale
+            return tf.sign(x) * tf.sqrt(tf.abs(x)), y
+        if mode == "p99":
+            return x / p99, y
+        x = tf.math.asinh(x)                  # 'zscore' (original)
+        m = tf.reduce_mean(x, axis=[1, 2], keepdims=True)
+        s = tf.math.reduce_std(x, axis=[1, 2], keepdims=True) + 1e-6
+        return (x - m) / s, y
+    return fn
+
+
+preprocess = make_preprocess()              # default 'zscore' (back-compat for direct imports)
 
 
 def augment(x, y):
@@ -99,7 +101,7 @@ def augment(x, y):
     return x, y
 
 
-def ram_dataset(X, y, training=False, batch=256, shuffle_buf=50000):
+def ram_dataset(X, y, training=False, batch=256, shuffle_buf=50000, preprocess=preprocess):
     """Index-based in-RAM tf.data (one copy of X). y is a 1-D float array (log1p z)."""
     n = len(X); H, W = X.shape[1], X.shape[2]
     ds = tf.data.Dataset.range(n)
@@ -120,10 +122,10 @@ def ram_dataset(X, y, training=False, batch=256, shuffle_buf=50000):
     return ds.prefetch(tf.data.AUTOTUNE)
 
 
-def predict_z(model, X, batch=512):
+def predict_z(model, X, batch=512, preprocess=preprocess):
     """Predict z for an in-RAM (n,S,S,5) array (preprocess, no augment) -> z (np.float64)."""
     dummy = np.zeros(len(X), np.float32)
-    ds = ram_dataset(X, dummy, training=False, batch=batch).map(lambda x, y: x)
+    ds = ram_dataset(X, dummy, training=False, batch=batch, preprocess=preprocess).map(lambda x, y: x)
     return np.expm1(model.predict(ds, verbose=0).ravel()).astype("float64")
 
 
@@ -219,28 +221,33 @@ def compile_model(model, lr=3e-4):
 # ============================== entry point ==============================
 def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_size=5000,
           batch=256, lr=3e-4, epochs=50, l2=1e-4, drop=0.4, patience=8,
+          preproc='zscore', preproc_scale=1000.0,
           run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI):
     """Load data into RAM, train, evaluate on the fixed 50k val, and (if a token is given) log
-    everything to MLflow — INCLUDING the outlier objids on the 50k as artifacts. Returns (metrics, model)."""
+    everything to MLflow — INCLUDING the outlier objids on the 50k as artifacts. Returns (metrics, model).
+    preproc: 'zscore'|'div'|'sqrt'|'p99' (same transform is used for training AND the 50k eval)."""
+    pp_tf = make_preprocess(preproc, preproc_scale)          # training (tf.data)
+    pp_np = make_np_preprocess(preproc, preproc_scale)       # eval (numpy) — kept in sync
     _, z_all, o2i = load_catalog(data_dir)
     idx = resolve_train_index(train_csv, data_dir, o2i, N, seed)
     es_idx, train_idx = idx[:es_size], idx[es_size:]
-    print(f'loading {len(train_idx):,} train + {len(es_idx):,} early-stop into RAM (crop={crop})...')
+    print(f'loading {len(train_idx):,} train + {len(es_idx):,} early-stop into RAM (crop={crop}, preproc={preproc})...')
     Xtr, ytr = load_into_ram(train_idx, crop, data_dir, z_all)
     Xes, _ = load_into_ram(es_idx, crop, data_dir, z_all); zes = z_all[es_idx]
     print(f'train {Xtr.shape} ({Xtr.nbytes / 1e9:.1f} GB float16)')
 
     model = compile_model(build_cnn((crop, crop, 5), l2=l2, drop=drop), lr=lr)
-    train_ds = ram_dataset(Xtr, ytr, training=True, batch=batch)
-    es_ds = ram_dataset(Xes, np.log1p(zes), training=False, batch=512)
+    train_ds = ram_dataset(Xtr, ytr, training=True, batch=batch, preprocess=pp_tf)
+    es_ds = ram_dataset(Xes, np.log1p(zes), training=False, batch=512, preprocess=pp_tf)
     config = dict(crop=crop, batch=batch, lr=lr, epochs=epochs, l2=l2, drop=drop, seed=seed,
-                  optimizer='adam', loss='huber(0.02)', target='log1p(z)', stretch='arcsinh',
-                  norm='per-image per-channel', augment='rot90+flip', arch='vgg-stem+3inception',
+                  optimizer='adam', loss='huber(0.02)', target='log1p(z)',
+                  preproc=preproc, preproc_scale=preproc_scale, augment='rot90+flip',
+                  arch='vgg-stem+3inception',
                   train_csv=str(train_csv), n_train=len(train_idx), params=int(model.count_params()))
 
     def _fit_eval():
         model.fit(train_ds, validation_data=es_ds, epochs=epochs, callbacks=make_callbacks(es_ds, zes, patience))
-        valdf = val_predictions(model, data_dir=data_dir, crop=crop)   # per-object on fixed 50k
+        valdf = val_predictions(model, data_dir=data_dir, crop=crop, preprocess=pp_np)   # per-object on fixed 50k
         return ev.metrics_from_df(valdf), valdf
 
     if setup_mlflow(mlflow_token, mlflow_uri, experiment):
@@ -248,7 +255,7 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
         with mlflow.start_run(run_name=run_name):
             mlflow.log_params(config)
             mlflow.log_text('\n\n'.join(inspect.getsource(f) for f in
-                            (preprocess, augment, ram_dataset, build_cnn)), 'recipe.py')
+                            (make_preprocess, augment, ram_dataset, build_cnn)), 'recipe.py')
             metrics, valdf = _fit_eval()
             outliers = outliers_from_df(valdf)
             mlflow.log_metrics({'val50k_sigma_MAD': metrics['sigma_MAD'],

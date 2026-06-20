@@ -24,6 +24,7 @@ SHARD = 6000
 # Set env CUTOUT_SIZE=24 when training on v3.
 SRC_SIZE = int(os.environ.get("CUTOUT_SIZE", 64))
 OUTLIER_THR = 0.05
+BAND_P99 = [0.231, 0.865, 1.955, 2.949, 4.012]   # u,g,r,i,z 99th-pct over the 600k v3 sample
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_VAL_CSV = os.path.join(_HERE, "splits", "val_objids.csv")
 DEFAULT_TRAIN_CSV = os.path.join(_HERE, "splits", "train_objids.csv")
@@ -40,13 +41,29 @@ def is_train_subset(train_csv, base_csv=DEFAULT_TRAIN_CSV):
             "n_outside_train": len(outside), "sample_outside": list(outside)[:5]}
 
 
-def default_preprocess(arr):
-    """arcsinh stretch + per-image per-channel normalize — matches the training pipeline."""
-    a = np.asarray(arr, dtype="float32")
-    a = np.arcsinh(a)
-    m = a.mean(axis=(1, 2), keepdims=True)
-    s = a.std(axis=(1, 2), keepdims=True) + 1e-6
-    return (a - m) / s
+def make_np_preprocess(mode="zscore", scale=1000.0):
+    """numpy preprocessing for eval — must mirror photoz_cnn.make_preprocess. Modes:
+    'zscore' arcsinh + per-image per-channel std | 'div' x/scale | 'sqrt' sign*sqrt(|x|/scale)
+    | 'p99' x / per-band p99."""
+    p99 = np.asarray(BAND_P99, "float32")
+
+    def fn(arr):
+        a = np.asarray(arr, dtype="float32")
+        if mode == "div":
+            return a / scale
+        if mode == "sqrt":
+            a = a / scale
+            return np.sign(a) * np.sqrt(np.abs(a))
+        if mode == "p99":
+            return a / p99
+        a = np.arcsinh(a)                      # 'zscore' (original)
+        m = a.mean(axis=(1, 2), keepdims=True)
+        s = a.std(axis=(1, 2), keepdims=True) + 1e-6
+        return (a - m) / s
+    return fn
+
+
+default_preprocess = make_np_preprocess()      # 'zscore' — matches the original training pipeline
 
 
 # ---- shared metric helpers (Delta_z based) ----

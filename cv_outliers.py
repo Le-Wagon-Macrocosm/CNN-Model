@@ -27,13 +27,13 @@ import tensorflow as tf
 import eval as ev
 from eval import DEFAULT_TRAIN_CSV, OUTLIER_THR
 from photoz_cnn import (load_catalog, resolve_train_index, load_into_ram, build_cnn,
-                        compile_model, preprocess, augment, make_callbacks, setup_mlflow)
+                        compile_model, preprocess, make_preprocess, augment, make_callbacks, setup_mlflow)
 
 N_FOLDS = 3
 EXPERIMENT = "oa"
 
 
-def _subset_ds(X, y, rows, training=False, batch=256, shuffle_buf=50000):
+def _subset_ds(X, y, rows, training=False, batch=256, shuffle_buf=50000, preprocess=preprocess):
     """tf.data over a SUBSET of an in-RAM array, addressed by `rows` (positions into X) — no copy."""
     rows = np.asarray(rows, np.int64); n = len(rows); H, W = X.shape[1], X.shape[2]
     ds = tf.data.Dataset.range(n)
@@ -53,8 +53,9 @@ def _subset_ds(X, y, rows, training=False, batch=256, shuffle_buf=50000):
     return ds.prefetch(tf.data.AUTOTUNE)
 
 
-def _predict_subset(model, X, rows, batch=512):
-    ds = _subset_ds(X, np.zeros(len(X), np.float32), rows, training=False, batch=batch).map(lambda x, y: x)
+def _predict_subset(model, X, rows, batch=512, preprocess=preprocess):
+    ds = _subset_ds(X, np.zeros(len(X), np.float32), rows, training=False, batch=batch,
+                    preprocess=preprocess).map(lambda x, y: x)
     return np.expm1(model.predict(ds, verbose=0).ravel()).astype('float64')
 
 
@@ -72,7 +73,9 @@ def _save_outliers_to_gcs(df, out_gcs, seed):
 
 def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=5000,
         patience=8, train_csv=DEFAULT_TRAIN_CSV, mlflow_token=None, experiment=EXPERIMENT,
+        preproc='zscore', preproc_scale=1000.0,
         out_gcs="gs://macrocosm-lewagon/results/cv_outliers"):
+    pp = make_preprocess(preproc, preproc_scale)
     cat, z_all, o2i = load_catalog(data_dir)
     objid_all = cat['objid'].values
     rows = resolve_train_index(train_csv, data_dir, o2i, N=N, seed=0)   # the train objects (fixed)
@@ -98,17 +101,18 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, epochs=50, es_size=
         es_pos, fit_pos = train_pos[:es_size], train_pos[es_size:]
         print(f"\n=== fold {k + 1}/{N_FOLDS} (run '{seed}-{k}'): train {len(fit_pos):,} | held-out {len(test_pos):,} ===")
         model = compile_model(build_cnn((crop, crop, 5)), lr=lr)
-        es_ds = _subset_ds(Xall, yall, es_pos, training=False, batch=512)
+        es_ds = _subset_ds(Xall, yall, es_pos, training=False, batch=512, preprocess=pp)
 
         ctx = mlflow.start_run(run_name=f"{seed}-{k}") if use_mlflow else nullcontext()
         with ctx:
             if use_mlflow:
                 mlflow.log_params(dict(seed=seed, fold=k, n_folds=N_FOLDS, crop=crop, batch=batch,
-                                       lr=lr, epochs=epochs, n_train=len(fit_pos), n_test=len(test_pos)))
-            model.fit(_subset_ds(Xall, yall, fit_pos, training=True, batch=batch),
+                                       lr=lr, epochs=epochs, preproc=preproc, preproc_scale=preproc_scale,
+                                       n_train=len(fit_pos), n_test=len(test_pos)))
+            model.fit(_subset_ds(Xall, yall, fit_pos, training=True, batch=batch, preprocess=pp),
                       validation_data=es_ds, epochs=epochs,
                       callbacks=make_callbacks(es_ds, zrow[es_pos], patience))
-            zpred[test_pos] = _predict_subset(model, Xall, test_pos)
+            zpred[test_pos] = _predict_subset(model, Xall, test_pos, preprocess=pp)
             foldid[test_pos] = k
             if use_mlflow:
                 dzf = ev.delta_z(zrow[test_pos], zpred[test_pos])
@@ -138,7 +142,11 @@ if __name__ == "__main__":
     p.add_argument("--epochs", type=int, default=50)
     p.add_argument("--mlflow-token", default=None, help="MLflow API token")
     p.add_argument("--experiment", default=EXPERIMENT, help=f"MLflow experiment name (default '{EXPERIMENT}')")
+    p.add_argument("--preproc", default="zscore", choices=["zscore", "div", "sqrt", "p99"],
+                   help="input preprocessing (default zscore)")
+    p.add_argument("--preproc-scale", type=float, default=1000.0)
     p.add_argument("--out", default="gs://macrocosm-lewagon/results/cv_outliers")
     a = p.parse_args()
     run(seed=a.seed, data_dir=a.data_dir, crop=a.crop, N=a.N, batch=a.batch,
-        lr=a.lr, epochs=a.epochs, mlflow_token=a.mlflow_token, experiment=a.experiment, out_gcs=a.out)
+        lr=a.lr, epochs=a.epochs, mlflow_token=a.mlflow_token, experiment=a.experiment,
+        preproc=a.preproc, preproc_scale=a.preproc_scale, out_gcs=a.out)
