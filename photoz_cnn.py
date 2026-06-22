@@ -243,11 +243,11 @@ def setup_mlflow(token=None, uri=None, experiment='photoz-cnn'):
     return True
 
 
-def make_callbacks(es_ds, zes, patience=8):
+def make_callbacks(es_ds, zes, patience=8, min_lr=1e-5):
     return [
         SigmaMadCallback(es_ds, zes),
         tf.keras.callbacks.EarlyStopping('val_sigma_MAD', mode='min', patience=patience, restore_best_weights=True),
-        tf.keras.callbacks.ReduceLROnPlateau('val_sigma_MAD', mode='min', factor=0.5, patience=3, min_lr=1e-5),
+        tf.keras.callbacks.ReduceLROnPlateau('val_sigma_MAD', mode='min', factor=0.5, patience=3, min_lr=min_lr),
     ]
 
 
@@ -259,7 +259,7 @@ def compile_model(model, lr=3e-4):
 
 # ============================== entry point ==============================
 def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_size=5000,
-          batch=256, lr=3e-4, epochs=50, l2=1e-4, drop=0.4, patience=8,
+          batch=256, lr=3e-4, min_lr=1e-5, epochs=50, l2=1e-4, drop=0.4, patience=8,
           preproc='zscore', preproc_scale=1000.0, arch=None,
           run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI):
     """Load data into RAM, train, evaluate on the fixed 50k val, and (if a token is given) log
@@ -278,14 +278,14 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
     model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop, arch=arch), lr=lr)
     train_ds = ram_dataset(Xtr, ytr, training=True, batch=batch, preprocess=pp_tf)
     es_ds = ram_dataset(Xes, np.log1p(zes), training=False, batch=512, preprocess=pp_tf)
-    config = dict(crop=crop, batch=batch, lr=lr, epochs=epochs, l2=l2, drop=drop, seed=seed,
+    config = dict(crop=crop, batch=batch, lr=lr, min_lr=min_lr, epochs=epochs, l2=l2, drop=drop, seed=seed,
                   optimizer='adam', loss='huber(0.02)', target='log1p(z)',
                   preproc=preproc, preproc_scale=preproc_scale, augment='rot90+flip',
                   arch=(arch or 'default'),
                   train_csv=str(train_csv), n_train=len(train_idx), params=int(model.count_params()))
 
     def _fit_eval():
-        model.fit(train_ds, validation_data=es_ds, epochs=epochs, callbacks=make_callbacks(es_ds, zes, patience))
+        model.fit(train_ds, validation_data=es_ds, epochs=epochs, callbacks=make_callbacks(es_ds, zes, patience, min_lr))
         valdf = val_predictions(model, data_dir=data_dir, crop=crop, preprocess=pp_np)   # per-object on fixed 50k
         return ev.metrics_from_df(valdf), valdf
 
