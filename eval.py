@@ -24,9 +24,9 @@ SHARD = 6000
 # Set env CUTOUT_SIZE=24 when training on v3.
 SRC_SIZE = int(os.environ.get("CUTOUT_SIZE", 64))
 OUTLIER_THR = 0.05
-BAND_P99 = [0.232, 0.870, 1.961, 2.965, 4.027]       # u,g,r,i,z 99th-pct over the 550k train set (v3)
-BAND_SKY_SIGMA = [0.051, 0.042, 0.085, 0.123, 0.218] # u,g,r,i,z sky noise (sigma-clip) over 550k train
-BAND_COLOR_SCALE = [1.400, 0.748, 0.929, 2.817]      # |p99| of asinh colours z-i,i-r,r-g,g-u (550k train)
+BAND_P99 = [0.235, 0.906, 2.059, 3.113, 4.242]       # u,g,r,i,z 99th-pct over the v4 train set (sample_v4.5, 24px)
+BAND_SKY_SIGMA = [0.051, 0.042, 0.085, 0.123, 0.218] # u,g,r,i,z sky noise (sigma-clip) over 550k train (v3 — recompute for v4 if using color-feat+p99)
+BAND_COLOR_SCALE = [1.400, 0.748, 0.929, 2.817]      # |p99| of asinh colours z-i,i-r,r-g,g-u (550k train v3 — recompute for v4 if using color-feat+p99)
 PREPROC_CHANNELS = {"color-feat+p99": 9}             # modes that change the channel count (else 5)
 
 
