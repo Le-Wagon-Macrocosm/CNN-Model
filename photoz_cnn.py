@@ -60,7 +60,13 @@ def _side_e1(inp, reg=None):
     return L.GlobalMaxPooling2D(name='se1_gmp')(s)                          # -> 256
 
 
+VALID_ARCHS = (None, 'default', 'side-e1')
+
+
 def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, arch=None):
+    if arch not in VALID_ARCHS:
+        raise ValueError(f"unknown arch {arch!r}; choose from {VALID_ARCHS} "
+                         f"(None/'default' = trunk only)")
     reg = regularizers.l2(l2) if l2 else None
     inp = Input(shape=input_shape, name='cutout')
     x = L.Conv2D(32, 3, padding='same', activation='relu', kernel_regularizer=reg, name='stem1a')(inp)
