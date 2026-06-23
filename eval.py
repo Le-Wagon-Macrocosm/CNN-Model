@@ -121,6 +121,18 @@ def _shard_mm(data_dir):
     return {int(re.findall(r"images_(\d+)_", p)[0]) // SHARD: np.load(p, mmap_mode="r") for p in paths}
 
 
+def mdn_point(raw):
+    """log1p(z)-space point estimate from a model's raw output, auto-detecting the head:
+    regression (N,1) -> the raveled output; MDN (N, 3*K) -> mean of the highest-weight Gaussian.
+    Callers apply expm1 themselves (so TTA can average in log1p space)."""
+    raw = np.asarray(raw)
+    if raw.ndim == 2 and raw.shape[1] > 1 and raw.shape[1] % 3 == 0:   # MDN: [pi(K), mu(K), sigma(K)]
+        K = raw.shape[1] // 3
+        pi, mu = raw[:, :K], raw[:, K:2 * K]
+        return mu[np.arange(len(mu)), pi.argmax(1)]
+    return raw.ravel()
+
+
 def tta_predict(model, imgs, preprocess, target="log1p"):
     """Test-time augmentation: average the model output over the 8 dihedral (D4) views
     (rot90 x4, each with/without horizontal flip) in the model's output space, then map to z.
@@ -129,7 +141,7 @@ def tta_predict(model, imgs, preprocess, target="log1p"):
     for k in range(4):
         r = np.rot90(imgs, k, axes=(1, 2))
         for v in (r, np.flip(r, axis=2)):
-            acc += model.predict(preprocess(np.ascontiguousarray(v)), verbose=0).ravel()
+            acc += mdn_point(model.predict(preprocess(np.ascontiguousarray(v)), verbose=0))
     pred = acc / 8.0
     return np.expm1(pred) if target == "log1p" else pred
 
@@ -167,7 +179,7 @@ def val_predictions(model, data_dir, val_csv=DEFAULT_VAL_CSV, catalog_path=None,
         if tta:
             zp[k:k + batch] = tta_predict(model, imgs, preprocess, target=target)
         else:
-            p = model.predict(preprocess(imgs), verbose=0).ravel()
+            p = mdn_point(model.predict(preprocess(imgs), verbose=0))
             zp[k:k + batch] = np.expm1(p) if target == "log1p" else p
 
     df = pd.DataFrame({"objid": val_obj.astype("int64"), "z_true": zt, "z_pred": zp})

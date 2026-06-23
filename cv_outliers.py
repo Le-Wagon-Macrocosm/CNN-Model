@@ -62,7 +62,7 @@ def _predict_subset(model, X, rows, batch=512, preprocess=preprocess, tta=False,
         return out
     ds = _subset_ds(X, np.zeros(len(X), np.float32), rows, training=False, batch=batch,
                     preprocess=preprocess).map(lambda x, y: x)
-    return np.expm1(model.predict(ds, verbose=0).ravel()).astype('float64')
+    return np.expm1(ev.mdn_point(model.predict(ds, verbose=0))).astype('float64')
 
 
 def _save_outliers_to_gcs(df, out_gcs, seed):
@@ -79,7 +79,7 @@ def _save_outliers_to_gcs(df, out_gcs, seed):
 
 def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, min_lr=1e-5, epochs=50, es_size=5000,
         patience=8, train_csv=DEFAULT_TRAIN_CSV, mlflow_token=None, experiment=EXPERIMENT,
-        preproc='zscore', preproc_scale=1000.0, arch=None, tta=False,
+        preproc='zscore', preproc_scale=1000.0, arch=None, tta=False, mdn=0,
         out_gcs="gs://macrocosm-lewagon/results/cv_outliers"):
     pp = make_preprocess(preproc, preproc_scale)
     pp_np = ev.make_np_preprocess(preproc, preproc_scale)   # numpy preprocess for TTA
@@ -107,7 +107,7 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, min_lr=1e-5, epochs
         train_pos = np.concatenate([folds[j] for j in range(N_FOLDS) if j != k])
         es_pos, fit_pos = train_pos[:es_size], train_pos[es_size:]
         print(f"\n=== fold {k + 1}/{N_FOLDS} (run '{seed}-{k}'): train {len(fit_pos):,} | held-out {len(test_pos):,} ===")
-        model = compile_model(build_cnn((crop, crop, ev.preproc_channels(preproc)), arch=arch), lr=lr)
+        model = compile_model(build_cnn((crop, crop, ev.preproc_channels(preproc)), arch=arch, mdn=mdn), lr=lr, mdn=mdn)
         es_ds = _subset_ds(Xall, yall, es_pos, training=False, batch=512, preprocess=pp)
 
         ctx = mlflow.start_run(run_name=f"{seed}-{k}") if use_mlflow else nullcontext()
@@ -115,7 +115,7 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, min_lr=1e-5, epochs
             if use_mlflow:
                 mlflow.log_params(dict(seed=seed, fold=k, n_folds=N_FOLDS, crop=crop, batch=batch,
                                        lr=lr, min_lr=min_lr, epochs=epochs, preproc=preproc, preproc_scale=preproc_scale,
-                                       arch=(arch or 'default'), tta=tta, n_train=len(fit_pos), n_test=len(test_pos)))
+                                       arch=(arch or 'default'), tta=tta, mdn=mdn, n_train=len(fit_pos), n_test=len(test_pos)))
             model.fit(_subset_ds(Xall, yall, fit_pos, training=True, batch=batch, preprocess=pp),
                       validation_data=es_ds, epochs=epochs,
                       callbacks=make_callbacks(es_ds, zrow[es_pos], patience, min_lr))
@@ -157,8 +157,9 @@ if __name__ == "__main__":
     p.add_argument("--arch", default=None, choices=[None, "default", "side-e1"],
                    help="model architecture (default = trunk only; 'side-e1' adds the side branch)")
     p.add_argument("--tta", action="store_true", help="test-time augmentation on the OOF predictions (8x slower)")
+    p.add_argument("--mdn", type=int, default=0, help="mixture-density head with this many Gaussians (0 = regression)")
     p.add_argument("--out", default="gs://macrocosm-lewagon/results/cv_outliers")
     a = p.parse_args()
     run(seed=a.seed, data_dir=a.data_dir, crop=a.crop, N=a.N, batch=a.batch,
         lr=a.lr, min_lr=a.min_lr, epochs=a.epochs, mlflow_token=a.mlflow_token, experiment=a.experiment,
-        preproc=a.preproc, preproc_scale=a.preproc_scale, arch=a.arch, tta=a.tta, out_gcs=a.out)
+        preproc=a.preproc, preproc_scale=a.preproc_scale, arch=a.arch, tta=a.tta, mdn=a.mdn, out_gcs=a.out)

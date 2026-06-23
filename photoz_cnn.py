@@ -63,7 +63,7 @@ def _side_e1(inp, reg=None):
 VALID_ARCHS = (None, 'default', 'side-e1')
 
 
-def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, arch=None):
+def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, arch=None, mdn=0):
     if arch not in VALID_ARCHS:
         raise ValueError(f"unknown arch {arch!r}; choose from {VALID_ARCHS} "
                          f"(None/'default' = trunk only)")
@@ -86,8 +86,14 @@ def build_cnn(input_shape, embed_dim=64, l2=1e-4, drop=0.4, spatial_drop=0.1, ar
     x = L.Dropout(drop, name='embedding_drop')(emb)
     if arch == 'side-e1':                       # concat the side branch before the z output
         x = L.Concatenate(name='head_concat')([x, _side_e1(inp, reg)])
-    zout = L.Dense(1, name='z')(x)
-    nm = 'photoz_cnn' + (f'-{arch}' if arch and arch != 'default' else '')
+    if mdn:                                     # mixture-density head: K gaussians [pi, mu, sigma]
+        pi = L.Dense(mdn, activation='softmax', name='mdn_pi')(x)
+        mu = L.Dense(mdn, name='mdn_mu')(x)
+        sig = L.Dense(mdn, activation='exponential', name='mdn_sigma')(x)
+        zout = L.Concatenate(name='z')([pi, mu, sig])          # (3*mdn,)
+    else:
+        zout = L.Dense(1, name='z')(x)
+    nm = 'photoz_cnn' + (f'-{arch}' if arch and arch != 'default' else '') + (f'-mdn{mdn}' if mdn else '')
     return Model(inp, zout, name=nm)
 
 
@@ -165,7 +171,7 @@ def predict_z(model, X, batch=512, preprocess=preprocess):
     """Predict z for an in-RAM (n,S,S,5) array (preprocess, no augment) -> z (np.float64)."""
     dummy = np.zeros(len(X), np.float32)
     ds = ram_dataset(X, dummy, training=False, batch=batch, preprocess=preprocess).map(lambda x, y: x)
-    return np.expm1(model.predict(ds, verbose=0).ravel()).astype("float64")
+    return np.expm1(ev.mdn_point(model.predict(ds, verbose=0))).astype("float64")
 
 
 # ============================== data loading ==============================
@@ -219,7 +225,7 @@ class SigmaMadCallback(tf.keras.callbacks.Callback):
         super().__init__(); self.val_ds = val_ds; self.z_true = np.asarray(z_true)
 
     def on_epoch_end(self, epoch, logs=None):
-        zp = np.expm1(self.model.predict(self.val_ds, verbose=0).ravel())
+        zp = np.expm1(ev.mdn_point(self.model.predict(self.val_ds, verbose=0)))
         sm, out = sigma_mad(self.z_true, zp), outlier_rate(self.z_true, zp)
         logs = logs if logs is not None else {}
         logs['val_sigma_MAD'] = sm; logs['val_outlier'] = out
@@ -257,9 +263,25 @@ def make_callbacks(es_ds, zes, patience=8, min_lr=1e-5):
     ]
 
 
-def compile_model(model, lr=3e-4):
-    model.compile(optimizer=tf.keras.optimizers.Adam(lr),
-                  loss=tf.keras.losses.Huber(delta=0.02), metrics=['mae'])
+def mdn_nll(num_gaussians):
+    """Negative log-likelihood of a K-Gaussian mixture (output = [pi(K), mu(K), sigma(K)]) vs scalar z."""
+    K = num_gaussians
+
+    def loss(y_true, y_pred):
+        pi = y_pred[:, :K]; mu = y_pred[:, K:2 * K]; sig = y_pred[:, 2 * K:]
+        y = tf.expand_dims(y_true, 1)                                   # (batch,1) broadcast over K
+        log_comp = (tf.math.log(pi + 1e-8) - 0.5 * tf.math.log(2 * np.pi * sig ** 2 + 1e-8)
+                    - 0.5 * ((y - mu) / (sig + 1e-8)) ** 2)             # (batch, K)
+        return tf.reduce_mean(-tf.reduce_logsumexp(log_comp, axis=1))   # log-sum-exp for stability
+    return loss
+
+
+def compile_model(model, lr=3e-4, mdn=0):
+    if mdn:                                          # NLL loss; no 'mae' (meaningless on mixture params)
+        model.compile(optimizer=tf.keras.optimizers.Adam(lr), loss=mdn_nll(mdn))
+    else:
+        model.compile(optimizer=tf.keras.optimizers.Adam(lr),
+                      loss=tf.keras.losses.Huber(delta=0.02), metrics=['mae'])
     return model
 
 
@@ -268,7 +290,7 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
           batch=256, lr=3e-4, min_lr=1e-5, epochs=50, l2=1e-4, drop=0.4, patience=8,
           preproc='zscore', preproc_scale=1000.0, arch=None,
           run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI,
-          val_csv=ev.DEFAULT_VAL_CSV, tta=False):
+          val_csv=ev.DEFAULT_VAL_CSV, tta=False, mdn=0):
     """Load data into RAM, train, evaluate on the val set (val_csv; default the fixed 50k), and (if a
     token is given) log everything to MLflow — INCLUDING the outlier objids on it as artifacts.
     Returns (metrics, model).
@@ -283,11 +305,11 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
     Xes, _ = load_into_ram(es_idx, crop, data_dir, z_all); zes = z_all[es_idx]
     print(f'train {Xtr.shape} ({Xtr.nbytes / 1e9:.1f} GB float16)')
 
-    model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop, arch=arch), lr=lr)
+    model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop, arch=arch, mdn=mdn), lr=lr, mdn=mdn)
     train_ds = ram_dataset(Xtr, ytr, training=True, batch=batch, preprocess=pp_tf)
     es_ds = ram_dataset(Xes, np.log1p(zes), training=False, batch=512, preprocess=pp_tf)
     config = dict(crop=crop, batch=batch, lr=lr, min_lr=min_lr, epochs=epochs, l2=l2, drop=drop, seed=seed,
-                  optimizer='adam', loss='huber(0.02)', target='log1p(z)',
+                  optimizer='adam', loss=(f'mdn_nll(K={mdn})' if mdn else 'huber(0.02)'), mdn=mdn, target='log1p(z)',
                   preproc=preproc, preproc_scale=preproc_scale, augment='rot90+flip',
                   arch=(arch or 'default'),
                   train_csv=str(train_csv), val_csv=str(val_csv), tta=tta,
