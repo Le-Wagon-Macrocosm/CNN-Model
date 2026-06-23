@@ -114,10 +114,24 @@ def _shard_mm(data_dir):
     return {int(re.findall(r"images_(\d+)_", p)[0]) // SHARD: np.load(p, mmap_mode="r") for p in paths}
 
 
+def tta_predict(model, imgs, preprocess, target="log1p"):
+    """Test-time augmentation: average the model output over the 8 dihedral (D4) views
+    (rot90 x4, each with/without horizontal flip) in the model's output space, then map to z.
+    `imgs` are RAW cutouts (n,H,W,5); the model was trained invariant to these transforms."""
+    acc = np.zeros(len(imgs), dtype="float64")
+    for k in range(4):
+        r = np.rot90(imgs, k, axes=(1, 2))
+        for v in (r, np.flip(r, axis=2)):
+            acc += model.predict(preprocess(np.ascontiguousarray(v)), verbose=0).ravel()
+    pred = acc / 8.0
+    return np.expm1(pred) if target == "log1p" else pred
+
+
 def val_predictions(model, data_dir, val_csv=DEFAULT_VAL_CSV, catalog_path=None,
-                    crop=64, batch=512, preprocess=default_preprocess, target="log1p"):
-    """Per-object predictions on the fixed 50k val set.
-    -> DataFrame[objid, z_true, z_pred, dz]  (rows whose image shard is missing are skipped)."""
+                    crop=64, batch=512, preprocess=default_preprocess, target="log1p", tta=False):
+    """Per-object predictions on the val set.
+    -> DataFrame[objid, z_true, z_pred, dz]  (rows whose image shard is missing are skipped).
+    tta=True averages over the 8 D4 views (8x slower, usually a small sigma_MAD gain)."""
     catalog_path = catalog_path or os.path.join(data_dir, "catalog_v1.parquet")
     cat = pd.read_parquet(catalog_path, columns=["objid", "redshift"])
     objid_all = cat["objid"].values
@@ -138,13 +152,16 @@ def val_predictions(model, data_dir, val_csv=DEFAULT_VAL_CSV, catalog_path=None,
 
     zt = z[val_idx].astype("float64")
     off = (SRC_SIZE - crop) // 2
-    preds = np.empty(len(val_idx), dtype="float32")
+    zp = np.empty(len(val_idx), dtype="float64")
     for k in range(0, len(val_idx), batch):
         bi = val_idx[k:k + batch]
         imgs = np.stack([np.asarray(mm[int(i) // SHARD][int(i) % SHARD][off:off + crop, off:off + crop, :])
                          for i in bi])
-        preds[k:k + batch] = model.predict(preprocess(imgs), verbose=0).ravel()
-    zp = np.expm1(preds) if target == "log1p" else preds.astype("float64")
+        if tta:
+            zp[k:k + batch] = tta_predict(model, imgs, preprocess, target=target)
+        else:
+            p = model.predict(preprocess(imgs), verbose=0).ravel()
+            zp[k:k + batch] = np.expm1(p) if target == "log1p" else p
 
     df = pd.DataFrame({"objid": val_obj.astype("int64"), "z_true": zt, "z_pred": zp})
     df["dz"] = delta_z(df["z_true"], df["z_pred"])
@@ -152,9 +169,9 @@ def val_predictions(model, data_dir, val_csv=DEFAULT_VAL_CSV, catalog_path=None,
 
 
 def evaluate(model, data_dir, val_csv=DEFAULT_VAL_CSV, catalog_path=None,
-             crop=64, batch=512, preprocess=default_preprocess, target="log1p"):
-    """Return dict(n, sigma_MAD, outlier, bias, MAE) for `model` on the 50k val set."""
-    df = val_predictions(model, data_dir, val_csv, catalog_path, crop, batch, preprocess, target)
+             crop=64, batch=512, preprocess=default_preprocess, target="log1p", tta=False):
+    """Return dict(n, sigma_MAD, outlier, bias, MAE) for `model` on the val set."""
+    df = val_predictions(model, data_dir, val_csv, catalog_path, crop, batch, preprocess, target, tta)
     return metrics_from_df(df)
 
 

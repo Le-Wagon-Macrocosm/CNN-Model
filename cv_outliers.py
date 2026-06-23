@@ -53,7 +53,13 @@ def _subset_ds(X, y, rows, training=False, batch=256, shuffle_buf=50000, preproc
     return ds.prefetch(tf.data.AUTOTUNE)
 
 
-def _predict_subset(model, X, rows, batch=512, preprocess=preprocess):
+def _predict_subset(model, X, rows, batch=512, preprocess=preprocess, tta=False, pp_np=None):
+    if tta:                                  # test-time augmentation over the 8 D4 views (8x slower)
+        rows = np.asarray(rows, np.int64); out = np.zeros(len(rows), 'float64')
+        for s in range(0, len(rows), batch):
+            xb = np.asarray(X[rows[s:s + batch]], 'float32')
+            out[s:s + batch] = ev.tta_predict(model, xb, pp_np)   # returns z (expm1 applied)
+        return out
     ds = _subset_ds(X, np.zeros(len(X), np.float32), rows, training=False, batch=batch,
                     preprocess=preprocess).map(lambda x, y: x)
     return np.expm1(model.predict(ds, verbose=0).ravel()).astype('float64')
@@ -73,9 +79,10 @@ def _save_outliers_to_gcs(df, out_gcs, seed):
 
 def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, min_lr=1e-5, epochs=50, es_size=5000,
         patience=8, train_csv=DEFAULT_TRAIN_CSV, mlflow_token=None, experiment=EXPERIMENT,
-        preproc='zscore', preproc_scale=1000.0, arch=None,
+        preproc='zscore', preproc_scale=1000.0, arch=None, tta=False,
         out_gcs="gs://macrocosm-lewagon/results/cv_outliers"):
     pp = make_preprocess(preproc, preproc_scale)
+    pp_np = ev.make_np_preprocess(preproc, preproc_scale)   # numpy preprocess for TTA
     cat, z_all, o2i = load_catalog(data_dir)
     objid_all = cat['objid'].values
     rows = resolve_train_index(train_csv, data_dir, o2i, N=N, seed=0)   # the train objects (fixed)
@@ -108,11 +115,11 @@ def run(seed, data_dir, crop=64, N=None, batch=256, lr=3e-4, min_lr=1e-5, epochs
             if use_mlflow:
                 mlflow.log_params(dict(seed=seed, fold=k, n_folds=N_FOLDS, crop=crop, batch=batch,
                                        lr=lr, min_lr=min_lr, epochs=epochs, preproc=preproc, preproc_scale=preproc_scale,
-                                       arch=(arch or 'default'), n_train=len(fit_pos), n_test=len(test_pos)))
+                                       arch=(arch or 'default'), tta=tta, n_train=len(fit_pos), n_test=len(test_pos)))
             model.fit(_subset_ds(Xall, yall, fit_pos, training=True, batch=batch, preprocess=pp),
                       validation_data=es_ds, epochs=epochs,
                       callbacks=make_callbacks(es_ds, zrow[es_pos], patience, min_lr))
-            zpred[test_pos] = _predict_subset(model, Xall, test_pos, preprocess=pp)
+            zpred[test_pos] = _predict_subset(model, Xall, test_pos, preprocess=pp, tta=tta, pp_np=pp_np)
             foldid[test_pos] = k
             if use_mlflow:
                 dzf = ev.delta_z(zrow[test_pos], zpred[test_pos])
@@ -149,8 +156,9 @@ if __name__ == "__main__":
     p.add_argument("--preproc-scale", type=float, default=1000.0)
     p.add_argument("--arch", default=None, choices=[None, "default", "side-e1"],
                    help="model architecture (default = trunk only; 'side-e1' adds the side branch)")
+    p.add_argument("--tta", action="store_true", help="test-time augmentation on the OOF predictions (8x slower)")
     p.add_argument("--out", default="gs://macrocosm-lewagon/results/cv_outliers")
     a = p.parse_args()
     run(seed=a.seed, data_dir=a.data_dir, crop=a.crop, N=a.N, batch=a.batch,
         lr=a.lr, min_lr=a.min_lr, epochs=a.epochs, mlflow_token=a.mlflow_token, experiment=a.experiment,
-        preproc=a.preproc, preproc_scale=a.preproc_scale, arch=a.arch, out_gcs=a.out)
+        preproc=a.preproc, preproc_scale=a.preproc_scale, arch=a.arch, tta=a.tta, out_gcs=a.out)

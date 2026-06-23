@@ -187,7 +187,13 @@ def resolve_train_index(train_csv, data_dir, o2i, N=None, seed=0):
     capped to N. Asserts the csv is a subset of the canonical train split (no val leakage)."""
     chk = is_train_subset(train_csv)
     assert chk['ok'], f"LEAK: {chk['n_outside_train']} objids in {train_csv} not in train split"
-    idx = np.array([o2i[int(o)] for o in pd.read_csv(train_csv)['objid'].values], dtype=np.int64)
+    objids = pd.read_csv(train_csv)['objid'].values
+    missing = [int(o) for o in objids if int(o) not in o2i]
+    if missing:
+        print(f"WARNING: {len(missing)}/{len(objids)} train objids are NOT in this catalog "
+              f"({data_dir}) and were skipped (e.g. {missing[:3]}). This means train_csv and the "
+              f"catalog/data are from different versions — fix the version match.")
+    idx = np.array([o2i[int(o)] for o in objids if int(o) in o2i], dtype=np.int64)
     present = present_shards(data_dir)
     idx = idx[[(i // SHARD) in present for i in idx]]
     rng = np.random.RandomState(seed); rng.shuffle(idx)
@@ -262,7 +268,7 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
           batch=256, lr=3e-4, min_lr=1e-5, epochs=50, l2=1e-4, drop=0.4, patience=8,
           preproc='zscore', preproc_scale=1000.0, arch=None,
           run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI,
-          val_csv=ev.DEFAULT_VAL_CSV):
+          val_csv=ev.DEFAULT_VAL_CSV, tta=False):
     """Load data into RAM, train, evaluate on the val set (val_csv; default the fixed 50k), and (if a
     token is given) log everything to MLflow — INCLUDING the outlier objids on it as artifacts.
     Returns (metrics, model).
@@ -284,12 +290,12 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
                   optimizer='adam', loss='huber(0.02)', target='log1p(z)',
                   preproc=preproc, preproc_scale=preproc_scale, augment='rot90+flip',
                   arch=(arch or 'default'),
-                  train_csv=str(train_csv), val_csv=str(val_csv),
+                  train_csv=str(train_csv), val_csv=str(val_csv), tta=tta,
                   n_train=len(train_idx), params=int(model.count_params()))
 
     def _fit_eval():
         model.fit(train_ds, validation_data=es_ds, epochs=epochs, callbacks=make_callbacks(es_ds, zes, patience, min_lr))
-        valdf = val_predictions(model, data_dir=data_dir, val_csv=val_csv, crop=crop, preprocess=pp_np)   # per-object on the val set
+        valdf = val_predictions(model, data_dir=data_dir, val_csv=val_csv, crop=crop, preprocess=pp_np, tta=tta)   # per-object on the val set
         return ev.metrics_from_df(valdf), valdf
 
     if setup_mlflow(mlflow_token, mlflow_uri, experiment):
