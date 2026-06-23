@@ -12,6 +12,7 @@ via an index-based tf.data pipeline (one copy of the array — no from_tensor_sl
 import os
 import glob
 import inspect
+import tempfile
 
 import numpy as np
 import pandas as pd
@@ -250,7 +251,9 @@ def setup_mlflow(token=None, uri=None, experiment='photoz-cnn'):
     os.environ['MLFLOW_TRACKING_URI'] = uri
     os.environ['MLFLOW_TRACKING_TOKEN'] = token
     mlflow.set_experiment(experiment)
-    mlflow.tensorflow.autolog(log_models=True, log_datasets=False)
+    # don't let autolog save models/checkpoints (those are .h5 and slow per-epoch);
+    # we save the final model ourselves as .keras below.
+    mlflow.tensorflow.autolog(log_models=False, log_datasets=False, checkpoint=False)
     print('MLflow: logging to', uri, '| experiment:', experiment)
     return True
 
@@ -285,12 +288,39 @@ def compile_model(model, lr=3e-4, mdn=0):
     return model
 
 
+def ssl_pretrain(model, X, preprocess, epochs=5, mask_frac=0.5, mask_block=4, batch=256, lr=1e-3):
+    """Lightweight self-supervised pretraining of the CNN backbone via masked reconstruction.
+    Attaches a tiny decoder to the shared encoder (up to 'inc3_bn', = input/8), masks random
+    blocks of the (preprocessed) cutout, and reconstructs the original — no labels. The encoder
+    layers are SHARED with `model`, so after this the supervised model starts from pretrained
+    conv weights (the decoder is discarded). Trains on whatever images you pass (can be more than
+    the labelled set)."""
+    C = model.input_shape[-1]
+    d = model.get_layer('inc3_bn').output                       # encoder feature map (input/8)
+    for f in (64, 32, 16):                                      # 3 x stride-2 upsample -> back to input size
+        d = L.Conv2DTranspose(f, 3, strides=2, padding='same', activation='relu')(d)
+    recon = L.Conv2D(C, 3, padding='same', name='ssl_recon')(d)
+    ae = Model(model.input, recon, name='ssl_ae')
+    ae.compile(optimizer=tf.keras.optimizers.Adam(lr), loss='mse')
+
+    def mask(x, y):                                             # x: preprocessed cutout (b,S,S,C)
+        b, S = tf.shape(x)[0], tf.shape(x)[1]; nb = S // mask_block
+        keep = tf.cast(tf.random.uniform((b, nb, nb, 1)) > mask_frac, x.dtype)
+        keep = tf.repeat(tf.repeat(keep, mask_block, 1), mask_block, 2)   # (b,S,S,1)
+        return x * keep, x                                      # (masked input, clean target)
+
+    base = ram_dataset(X, np.zeros(len(X), np.float32), training=True, batch=batch, preprocess=preprocess)
+    print(f'SSL pretrain: {epochs} epochs on {len(X):,} images (mask_frac={mask_frac}, block={mask_block})')
+    ae.fit(base.map(mask), epochs=epochs, verbose=1)            # encoder weights pretrained in-place
+    print('SSL pretrain done -> backbone initialised; fine-tuning supervised next')
+
+
 # ============================== entry point ==============================
 def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_size=5000,
           batch=256, lr=3e-4, min_lr=1e-5, epochs=50, l2=1e-4, drop=0.4, patience=8,
           preproc='zscore', preproc_scale=1000.0, arch=None,
           run_name='cnn', mlflow_token=None, experiment='photoz-cnn', mlflow_uri=MLFLOW_URI,
-          val_csv=ev.DEFAULT_VAL_CSV, tta=False, mdn=0):
+          val_csv=ev.DEFAULT_VAL_CSV, tta=False, mdn=0, pretrain=0):
     """Load data into RAM, train, evaluate on the val set (val_csv; default the fixed 50k), and (if a
     token is given) log everything to MLflow — INCLUDING the outlier objids on it as artifacts.
     Returns (metrics, model).
@@ -306,10 +336,12 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
     print(f'train {Xtr.shape} ({Xtr.nbytes / 1e9:.1f} GB float16)')
 
     model = compile_model(build_cnn((crop, crop, preproc_channels(preproc)), l2=l2, drop=drop, arch=arch, mdn=mdn), lr=lr, mdn=mdn)
+    if pretrain:                                         # optional self-supervised backbone pretraining
+        ssl_pretrain(model, Xtr, pp_tf, epochs=pretrain, batch=batch)
     train_ds = ram_dataset(Xtr, ytr, training=True, batch=batch, preprocess=pp_tf)
     es_ds = ram_dataset(Xes, np.log1p(zes), training=False, batch=512, preprocess=pp_tf)
     config = dict(crop=crop, batch=batch, lr=lr, min_lr=min_lr, epochs=epochs, l2=l2, drop=drop, seed=seed,
-                  optimizer='adam', loss=(f'mdn_nll(K={mdn})' if mdn else 'huber(0.02)'), mdn=mdn, target='log1p(z)',
+                  optimizer='adam', loss=(f'mdn_nll(K={mdn})' if mdn else 'huber(0.02)'), mdn=mdn, pretrain=pretrain, target='log1p(z)',
                   preproc=preproc, preproc_scale=preproc_scale, augment='rot90+flip',
                   arch=(arch or 'default'),
                   train_csv=str(train_csv), val_csv=str(val_csv), tta=tta,
@@ -334,6 +366,8 @@ def train(data_dir, crop=64, train_csv=DEFAULT_TRAIN_CSV, N=None, seed=0, es_siz
             # requirement 1: persist WHICH objids are outliers (+ all per-object preds)
             mlflow.log_text(outliers.to_csv(index=False), 'outliers_val50k.csv')
             mlflow.log_text(valdf.to_csv(index=False), 'val50k_predictions.csv')
+            kpath = os.path.join(tempfile.gettempdir(), f'{run_name}.keras')   # final model (.keras, not .h5)
+            model.save(kpath); mlflow.log_artifact(kpath)
     else:
         metrics, valdf = _fit_eval()
 
