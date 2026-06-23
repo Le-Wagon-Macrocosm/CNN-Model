@@ -1,0 +1,95 @@
+objid,category,frame,reason
+1237662500549886343,satellite trail,3964/5/281,satellite/aircraft trail across cutout (bright g-band line)
+1237667728049374221,frame contamination,5181/6/89,green diffuse glow/scattered light over whole frame
+1237679322852426085,frame contamination,7881/3/119,scattered-light ghost + bright diagonal streaks; target in contaminated region
+1237658800425664616,frame contamination,3103/1/130,very bright saturated star diffraction spikes + bleed trail + scattered light over whole frame
+1237652949064548669,frame contamination,1740/6/53,bright-star bleed columns (green/red) + diagonal trail over whole frame
+1237667211049631977,frame contamination,5061/3/195,very bright saturated star halo + diffraction spikes + horizontal bleed streaks over whole frame
+1237679323388706828,EDGE truncation,7881/4/110,"EDGE flag; near frame edge, cutout may be truncated off-frame"
+1237653440301564026,frame contamination,1855/1/55,red bleed/scattered-light plume from a very bright off-frame star (left) engulfs target
+1237653587940212992,frame contamination,1889/4/42,very bright saturated star halo + diffraction spikes + saturation block + scattered-light gradient over whole frame
+1237662498941108431,frame contamination,3964/2/309,green bleed column + left scattered light/brightness step; frame-level contamination
+1237663784214069699,satellite trail,4263/4/370,green satellite/aircraft trail passing through target cutout
+1237668585434055112,frame contamination,5381/3/117,lower-half i-band red flood/scattered light + red bleed column; target in flooded region
+1237651755087364396,frame contamination,1462/6/415,lower-half i-band red flood/scattered light + red bleed column; target in flooded region
+1237658423549231118,frame contamination,3015/3/236,green scattered-light plume from bright star (left) engulfs target cutout
+1237651192437473878,satellite trail,1331/6/275,multiple parallel blue u-band satellite trails crossing whole frame
+1237662337332871241,satellite trail,3926/5/155,blue u-band satellite trail crossing target cutout
+1237651251522109452,frame contamination,1345/4/715,blue u-band scattered-light glow (top-left) contaminating target cutout
+1237660670894538903,satellite trail,3538/5/292,red i-band satellite trail adjacent to target cutout
+1237661464921309453,frame contamination,3723/4/211,red/green scattered-light plume from a bright off-frame star (right) engulfs target cutout
+1237657191443464209,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464326,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464436,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464439,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464443,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464475,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464491,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464513,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464528,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464751,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464926,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237657191443464999,frame contamination,2728/4/434,huge green r-band scattered-light plume/diffuse glow over most of the frame
+1237664673796522016,frame contamination,4470/5/177,g-band sky residual +0.115 nmgy makes whole frame blue (sky-subtraction anomaly)
+1237664673796522169,frame contamination,4470/5/177,g-band sky residual +0.115 nmgy makes whole frame blue (sky-subtraction anomaly)
+1237667212135825473,frame contamination,5061/5/385,red i-band scattered-light plume from a bright star engulfs target cutout
+1237653622837412561,frame contamination,1897/5/51,red i-band satellite trail + whole frame bluish (suspected elevated g-band sky)
+1237661815487660169,satellite trail,3805/1/53,red i-band satellite trail crossing target cutout
+1237666409554183285,frame contamination,4874/6/1001,whole-frame green r-band flood / sky anomaly over whole frame
+1237664673796456487,frame contamination,4470/5/176,elevated g-band sky (+0.049 nmgy) makes whole frame blue (sky-subtraction anomaly)
+1237664673796456503,frame contamination,4470/5/176,elevated g-band sky (+0.049 nmgy) makes whole frame blue (sky-subtraction anomaly)
+1237664673796456690,frame contamination,4470/5/176,elevated g-band sky (+0.049 nmgy) makes whole frame blue (sky-subtraction anomaly)
+1237664673796456743,frame contamination,4470/5/176,elevated g-band sky (+0.049 nmgy) makes whole frame blue (sky-subtraction anomaly)
+1237664673796456758,frame contamination,4470/5/176,elevated g-band sky (+0.049 nmgy) makes whole frame blue (sky-subtraction anomaly)
+1237664673796456951,frame contamination,4470/5/176,elevated g-band sky (+0.049 nmgy) makes whole frame blue (sky-subtraction anomaly)
+1237658918533923345,satellite trail,3130/5/79,diagonal satellite trail + target near right edge
+1237657191443529753,frame contamination,2728/4/435,whole-frame bicolor scattered-light gradient (left red i / right green r); uneven sky over whole frame
+1237657191443529802,frame contamination,2728/4/435,whole-frame bicolor scattered-light gradient (left red i / right green r); uneven sky over whole frame
+1237657191443529865,frame contamination,2728/4/435,whole-frame bicolor scattered-light gradient (left red i / right green r); uneven sky over whole frame
+1237657191443530208,frame contamination,2728/4/435,whole-frame bicolor scattered-light gradient (left red i / right green r); uneven sky over whole frame
+1237657191443529806,frame contamination,2728/4/435,whole-frame bicolor scattered-light gradient (left red i / right green r); uneven sky over whole frame
+1237662195596918811,satellite trail,3893/5/124,blue u-band satellite trail crossing target cutout
+1237668273513824541,frame contamination,5308/6/144,
+1237656893459267737,frame contamination,2659/1/116,red/green scattered-light plume from a bright off-frame star (left) engulfs target cutout
+1237656568112349893,frame contamination,2583/3/68,
+1237663547972190532,frame contamination,4208/4/85,
+1237663547972190347,frame contamination,4208/4/85,
+1237668585434120304,frame contamination,5381/3/118,
+1237668585434120565,frame contamination,5381/3/118,
+1237667781772705978,frame contamination,5194/2/642,
+1237667781772706092,frame contamination,5194/2/642,
+1237658918533923216,frame contamination,3130/5/79,diagonal satellite trail + blue scattered-light gradient on the right
+1237657606419185766,frame contamination,2825/1/45,very bright saturated star huge horizontal bleed bands + saturation block over whole frame (sky spikes in all bands)
+1237678617432818000,satellite trail,7717/1/558,green r-band satellite trail crossing target cutout
+1237656496181936708,frame contamination,2566/5/225,diffuse nebulous structure (Galactic dust/cirrus) over whole frame
+1237664834849079426,frame contamination,4508/1/44,red/green scattered-light plume from a bright off-frame star (left) engulfs target cutout
+1237661416060092621,frame contamination,3712/1/120,very bright star scattered light + ghosts + bleed bands (bottom-left); sky elevated ~0.1 in all bands
+1237651496296645126,frame contamination,1402/4/126,very bright red star halo + diffraction spikes (top-right) engulf target cutout
+1237680297812361733,frame contamination,8108/3/155,diffuse nebulous structure (cirrus/dust) over whole frame; target in nebulous region
+1237649918426874042,frame contamination,1035/1/32,
+1237667430646218908,frame contamination,5112/4/445,elevated i-band sky (+0.079) makes whole frame reddish + green satellite trail
+1237667430646218946,frame contamination,5112/4/445,elevated i-band sky (+0.079) makes whole frame reddish + green satellite trail
+1237667430646218975,frame contamination,5112/4/445,elevated i-band sky (+0.079) makes whole frame reddish + green satellite trail
+1237667430646218957,frame contamination,5112/4/445,elevated i-band sky (+0.079) makes whole frame reddish + green satellite trail
+1237652935645397739,frame contamination,1737/5/93,very bright red star halo + dark bleed column (top); frame contamination
+1237660412648227109,frame contamination,3478/4/118,blue-cyan scattered-light patch on left edge covering target cutout
+1237669681726554511,frame contamination,5636/5/149,very bright saturated star halo + diffraction spikes + green bleed column dominating whole frame
+1237661872394010647,frame contamination,3818/3/23,target adjacent to a bright star; cutout contaminated by its halo/diffraction spikes
+1237680302640005661,frame contamination,8109/4/91,two very bright stars with halos + diffraction spikes; i-band sky elevated 0.106
+1237663783680737336,frame contamination,4263/3/424,target adjacent to a bright star; cutout contaminated by its halo/diffraction spikes
+1237661070319157408,frame contamination,3631/5/180,target adjacent to a bright star; cutout contaminated by its halo/spikes
+1237660584441086075,frame contamination,3518/4/29,target adjacent to a bright star; cutout contaminated by its halo/spikes
+1237657776606413082,frame contamination,2864/6/32,target adjacent to a saturated bright star; cutout contaminated by its halo/spikes
+1237662224090005527,frame contamination,3900/2/718,target adjacent to a saturated bright star; cutout contaminated by its halo/spikes
+1237673808655810662,frame contamination,6597/4/188,target adjacent to a saturated bright star; cutout contaminated by its halo/spikes
+1237668270822588447,frame contamination,5308/1/39,target adjacent to a saturated bright star; cutout contaminated by its halo/spikes
+1237657855543738420,frame contamination,2883/1/296,elevated g-band sky 0.063 makes whole frame blue (sky anomaly) + blue satellite trail
+1237657855543738499,frame contamination,2883/1/296,elevated g-band sky 0.063 makes whole frame blue (sky anomaly) + blue satellite trail
+1237657855543738502,frame contamination,2883/1/296,elevated g-band sky 0.063 makes whole frame blue (sky anomaly) + blue satellite trail
+1237657855543738531,frame contamination,2883/1/296,elevated g-band sky 0.063 makes whole frame blue (sky anomaly) + blue satellite trail
+1237662195077677077,frame contamination,3893/4/393,target adjacent to a saturated bright star; cutout contaminated by its halo/spikes
+1237662640656285819,frame contamination,3997/2/23,target adjacent to a saturated bright star; cutout contaminated by its halo/spikes
+1237663542609773133,frame contamination,4207/2/181,scattered-light gradient (top-right; brighter/tinted background) covering target cutout
+1237652943706522213,frame contamination,1739/4/216,diffuse nebulous structure (cirrus) over whole frame
+1237665127994556446,frame contamination,4576/3/257,target adjacent to a saturated bright star; cutout contaminated by its halo/spikes
+1237658919070859470,frame contamination,3130/6/80,very bright saturated star huge bleed + spikes + scattered light (bottom-left); sky elevated ~0.06 in all bands
