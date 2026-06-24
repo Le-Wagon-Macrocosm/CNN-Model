@@ -1,9 +1,12 @@
 """Fusion photo-z model: a small MLP + MDN head over [tabular base preds | presence mask | CNN fuse64].
 
 Input vector (83-d):
-  - 3  tabular base predictions  : RF / HGB / MLP outputs of the StackingRegressor (baseline_stack.pkl)
-  - 16 presence mask (0/1)        : is each of the 16 tabular features present (not NaN) for this object
-  - 64 CNN fuse64                 : the side-e2 CNN's `fuse64` activation (falls back to `embedding`)
+  - 3  tabular base predictions  : RF / HGB / MLP outputs of the v4 FrozenStack (baseline_stack_v4.pkl)
+  - 16 absence mask (0/1)         : 1 if that tabular feature is ABSENT (missing/dropped), else 0
+  - 64 CNN embedding              : the CNN's `fuse64` (side-e2) or `embedding` (default) activation
+
+For v4 the inputs are precomputed per (objid, missing-pattern) into a parquet by prepare_fusion_data.py;
+train with `train_fusion_parquet(...)`. The older `train_fusion(...)` assembles them on the fly instead.
 
 Target log1p(z); MDN (K-Gaussian mixture) output, same NLL loss / point estimate as the CNN
 (reused from photoz_cnn / eval). The presence mask lets the head down-weight the tabular preds when
@@ -12,7 +15,7 @@ fails (the ~900 "hard" colour-degenerate objects).
 
     from fusion import train_fusion
     train_fusion(data_dir="/content/data", cnn_path="cnn.keras",
-                 stack_path="baseline_stack.pkl", mlflow_token="<token>")
+                 stack_path="baseline_stack_v4.pkl", mlflow_token="<token>")
 """
 import numpy as np
 import pandas as pd
@@ -23,7 +26,7 @@ from tensorflow.keras import regularizers
 import eval as ev
 from photoz_cnn import mdn_nll, compile_model, load_into_ram, make_callbacks, setup_mlflow
 
-# the 16 tabular features, in the exact order baseline_stack.pkl expects
+# the 16 tabular features, in the exact order the baseline bases expect
 TAB_FEATURES = ["dered_u", "dered_g", "dered_r", "dered_i", "dered_z",
                 "g-r", "u-g", "r-i", "i-z",
                 "log_expRad_r", "log_deVRad_r", "log_petroRad_r", "log_petroR50_r", "log_petroR90_r",
@@ -86,21 +89,27 @@ def tabular_features(cat):
         "log_expRad_r": logr("expRad_r"), "log_deVRad_r": logr("deVRad_r"),
         "log_petroRad_r": logr("petroRad_r"), "log_petroR50_r": np.log1p(np.where(R50 < 0, np.nan, R50)),
         "log_petroR90_r": np.log1p(np.where(R90 < 0, np.nan, R90)),
-        "fracDeV_r": col("fracDeV_r"), "conc_r": R90 / R50,
+        "fracDeV_r": col("fracDeV_r"), "conc_r": R90 / np.where(R50 == 0, np.nan, R50),
     }
     X = np.stack([feats[f] for f in TAB_FEATURES], axis=1).astype("float32")
+    X[~np.isfinite(X)] = np.nan          # match train_baseline: replace([inf,-inf], nan) before dropna
     mask = (~np.isnan(X)).astype("uint8")
     return X, mask
 
 
 def tabular_base_preds(stack, X16, medians=None):
-    """3 base predictions (RF/HGB/MLP) from the StackingRegressor. NaNs are median-imputed first
-    (the base learners were fit on dropna'd data); the presence mask carries the missingness signal.
-    Pass `medians` (len-16) to reuse train medians on val; else computed from X16."""
+    """3 base predictions (RF/HGB/MLP) from the tabular baseline. Accepts either:
+      - v4 FrozenStack dict {"bases": {name: est}, "base_order": [...]}  -> column_stack of base.predict
+      - v1 sklearn StackingRegressor                                    -> stack.transform
+    NaNs are median-imputed first (the bases were fit on dropna'd data); the presence mask carries the
+    missingness signal. Pass `medians` (len-16) to reuse train medians on val; else computed from X16."""
     if medians is None:
         medians = np.nanmedian(X16, axis=0)
     Xi = np.where(np.isnan(X16), medians, X16).astype("float32")
-    base = stack.transform(Xi)                     # (N,3): one column per base estimator
+    if isinstance(stack, dict) and "bases" in stack:                       # v4 per-base FrozenStack
+        base = np.column_stack([stack["bases"][m].predict(Xi) for m in stack["base_order"]])
+    else:                                                                  # v1 StackingRegressor
+        base = stack.transform(Xi)                 # (N,3): one column per base estimator
     return base.astype("float32"), medians
 
 
@@ -137,7 +146,9 @@ def train_fusion(data_dir, cnn_path, stack_path, crop=24, preproc='color-feat+p9
     train_csv = train_csv or ev.DEFAULT_TRAIN_CSV
     val_csv = val_csv or ev.DEFAULT_VAL_CSV
     cat, z_all, o2i = load_catalog_v4(data_dir)
-    stack = joblib.load(stack_path)["model"]
+    art = joblib.load(stack_path)
+    # v4 FrozenStack pkl is a dict with "bases"; the v1 bundle keeps its StackingRegressor under ["model"]
+    stack = art if (isinstance(art, dict) and "bases" in art) else art["model"]
     cnn = tf.keras.models.load_model(cnn_path, compile=False)   # MDN custom loss can't deserialize
 
     def split_xy(csv, medians=None):
@@ -172,3 +183,62 @@ def train_fusion(data_dir, cnn_path, stack_path, crop=24, preproc='color-feat+p9
         if use_mlflow:
             mlflow.log_metrics({f"val_{k}": v for k, v in m.items()})
     return model, m
+
+
+# ============================== parquet training (precomputed inputs) ==============================
+def _bucket_smad(z_true, z_pred, n_absent):
+    """sigma_MAD overall + by missing-feature bucket (0 / 1-2 / 3-5 / 6+)."""
+    rows = [("all", np.ones(len(z_true), bool))]
+    for lab, lo, hi in [("absent=0", 0, 0), ("absent 1-2", 1, 2), ("absent 3-5", 3, 5), ("absent 6+", 6, 99)]:
+        rows.append((lab, (n_absent >= lo) & (n_absent <= hi)))
+    out = {}
+    for lab, mk in rows:
+        if mk.sum():
+            out[lab] = {"n": int(mk.sum()), "sigma_MAD": round(ev.sigma_mad(z_true[mk], z_pred[mk]), 5),
+                        "outlier_%": round(ev.outlier_rate(z_true[mk], z_pred[mk]) * 100, 2)}
+    return out
+
+
+def train_fusion_parquet(parquet, mdn=5, hidden=(128, 128, 64), l2=1e-4, drop=0.3, lr=3e-4,
+                         batch=1024, epochs=80, patience=10, min_lr=1e-5, val_full_only_es=True,
+                         run_name="fusion-v4", mlflow_token=None, experiment="fusion", save_path=None):
+    """Train the fusion MLP+MDN on the precomputed parquet (cols: split, n_absent, redshift,
+    base_*, mask_*, emb_*). Early-stops on val sigma_MAD; reports val sigma_MAD by missing bucket."""
+    df = pd.read_parquet(parquet)
+    base_c = ["base_RF", "base_HGB", "base_MLP"]
+    mask_c = [c for c in df.columns if c.startswith("mask_")]
+    emb_c = sorted([c for c in df.columns if c.startswith("emb_")], key=lambda c: int(c[4:]))
+    feat = base_c + mask_c + emb_c
+    assert len(feat) == N_BASE + N_MASK + N_EMB, len(feat)
+
+    def xy(name):
+        d = df[df.split == name]
+        return (d[feat].to_numpy("float32"), np.log1p(d["redshift"].to_numpy("float32")),
+                d["redshift"].to_numpy("float64"), d["n_absent"].to_numpy("int16"))
+    Xtr, ytr, _, _ = xy("train")
+    Xva, yva, zva, nva = xy("val")
+    print(f"train {Xtr.shape}  val {Xva.shape}  (in-dim {len(feat)})")
+
+    model = compile_model(build_fusion(len(feat), hidden, mdn, l2, drop), lr=lr, mdn=mdn)
+    # early-stop on the FULL-feature val subset (comparable to the tabular/CNN baselines), if asked
+    es_mask = (nva == 0) if val_full_only_es else np.ones(len(nva), bool)
+    cbs = make_callbacks(Xva[es_mask], zva[es_mask], patience, min_lr)
+
+    use_mlflow = setup_mlflow(mlflow_token, experiment=experiment)
+    ctx = __import__("mlflow").start_run(run_name=run_name) if use_mlflow else __import__("contextlib").nullcontext()
+    with ctx:
+        if use_mlflow:
+            import mlflow
+            mlflow.log_params(dict(mdn=mdn, hidden=str(hidden), l2=l2, drop=drop, lr=lr, batch=batch,
+                                   n_train=len(Xtr), n_val=len(Xva), inputs="3base+16mask+64emb"))
+        model.fit(Xtr, ytr, validation_data=(Xva, yva), epochs=epochs, batch_size=batch, callbacks=cbs)
+        zp = np.expm1(ev.mdn_point(model.predict(Xva, verbose=0)))
+        buckets = _bucket_smad(zva, zp, nva)
+        print("\n=== val sigma_MAD by missing bucket ===")
+        for k, v in buckets.items():
+            print(f"  {k:12s} {v}")
+        if use_mlflow:
+            mlflow.log_metrics({f"val_{k.replace(' ', '_')}_sMAD": v["sigma_MAD"] for k, v in buckets.items()})
+    if save_path:
+        model.save(save_path); print("saved", save_path)
+    return model, buckets
