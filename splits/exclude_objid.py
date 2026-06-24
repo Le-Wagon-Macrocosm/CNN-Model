@@ -32,16 +32,26 @@ DEFAULT_CAT = "frame contamination"
 RA_CAT = "RA~0 miscut"
 RA_REASON = "spans an RA 0/360 frame; HDU0 TAN-WCS off by ~95-176px over the whole frame -> cutout miscut"
 
-# Samples ACTUALLY removed from the v4-5 training/validation split: only the two whose cutouts were
-# confirmed broken (pure-noise thumbnails). The rest of the suspect catalog below (RA~0 list +
-# manual_exclusions.csv) is FLAGGED for QC / kept out of the gallery, but RETAINED in the split —
-# those are precautionary, not confirmed defective, so dropping them would throw away good data.
-CONFIRMED = {
-    1237657191978959161: ("RA~0 miscut (confirmed)",
-        "noise cutout: HDU0 TAN-WCS mispositions the whole RA 0/360 frame 2728/5/413 (ra=0.054)"),
-    1237663784197357651: ("RA~0 miscut (confirmed)",
-        "noise cutout: HDU0 TAN-WCS mispositions the whole RA 0/360 frame 4263/4/115 (ra=359.855)"),
-}
+# Samples ACTUALLY removed from the v4-5 training/validation split: RA~0 mis-cuts CONFIRMED FROM THE
+# IMAGE (the cutout is pure sky with no central source -> the galaxy fell outside the frame after the
+# ~95-176px WCS mispositioning). Detected by check_ra0_real.py: of the 514 RA~0 suspects, 182 have
+# central g+r+i SNR < 12 (vs ~57 median for normal galaxies); the other ~330 show a clear centred
+# galaxy and are RETAINED (their frame does not actually straddle 0/360). The rest of the suspect
+# catalog below (full RA~0 list + manual_exclusions.csv) stays FLAGGED for QC / out of the gallery
+# but RETAINED in the split — precautionary, not image-confirmed defective.
+IMG_VICTIMS = os.path.join(HERE, "ra0_image_victims.csv")
+
+
+def load_confirmed():
+    """objid -> (category, reason) for the image-verified RA~0 victims removed from the split."""
+    if not os.path.exists(IMG_VICTIMS):
+        return {}
+    v = pd.read_csv(IMG_VICTIMS, dtype={"objid": "int64"})
+    return {int(o): ("RA~0 miscut (image-verified)", str(rs))
+            for o, rs in zip(v.objid.tolist(), v.reason.tolist())}
+
+
+CONFIRMED = load_confirmed()
 
 
 def load_manual():
@@ -145,9 +155,12 @@ def write_md(man, rem, counts):
              f"actually dropped).\n")
     L.append("---\n")
     L.append(f"## Confirmed removals ({n_conf})\n")
-    for o, (c, rs) in CONFIRMED.items():
-        L.append(f"- `{o}` — {rs}")
-    L.append("")
+    L.append("**Image-verified RA~0 mis-cuts**: of the 514 RA~0 suspects, these have a pure-noise cutout "
+             "(central g+r+i SNR < 12, vs ~57 median for normal galaxies) — the galaxy fell outside the "
+             "frame after the ~95-176px WCS mispositioning, so the image is unusable. The other ~330 "
+             "suspects show a clear centred galaxy and are RETAINED (their frame does not straddle 0/360). "
+             "Detected by `check_ra0_real.py`; full per-object list (objid, snr, centroid) in "
+             "**`ra0_image_victims.csv`**.\n")
     L.append("---\n")
     L.append(f"## Suspect catalog (flagged, retained)\n")
     L.append(f"### RA~0 miscut ({n_ra})\n")

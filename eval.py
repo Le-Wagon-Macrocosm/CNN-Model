@@ -27,13 +27,13 @@ OUTLIER_THR = 0.05
 # u,g,r,i,z 99th-pct over the v4 train set, per crop size (smaller crop = more central = higher p99).
 # Selected by CUTOUT_SIZE, so it MUST match the training crop for preproc='p99' to normalize correctly.
 _BAND_P99_BY_SIZE = {
-    16: [0.314, 1.297, 2.980, 4.523, 6.156],   # v4.7
-    24: [0.235, 0.906, 2.059, 3.113, 4.242],   # v4.5
-    32: [0.192, 0.687, 1.535, 2.305, 3.141],   # v4.6
+    16: [0.314, 1.297, 2.980, 4.523, 6.156],            # v4.7
+    24: [0.2344, 0.9043, 2.0586, 3.1094, 4.2344],       # v4.5 (v4-5-train split, 554,461)
+    32: [0.192, 0.687, 1.535, 2.305, 3.141],            # v4.6
 }
 BAND_P99 = _BAND_P99_BY_SIZE.get(SRC_SIZE, _BAND_P99_BY_SIZE[24])
-BAND_SKY_SIGMA = [0.0511, 0.0405, 0.0781, 0.1173, 0.2681]  # u,g,r,i,z sky noise (sigma-clip std), v4.5/24px train split (554,626)
-BAND_COLOR_SCALE = [1.8008, 1.1198, 1.2863, 2.892]         # |p99| of asinh colours z-i,i-r,r-g,g-u, v4.5/24px train split (554,626)
+BAND_SKY_SIGMA = [0.0511, 0.0405, 0.0781, 0.1173, 0.2682]  # u,g,r,i,z sky noise (sigma-clip std), v4.5/24px v4-5-train split (554,461)
+BAND_COLOR_SCALE = [1.8006, 1.1196, 1.2861, 2.892]         # |p99| of asinh colours z-i,i-r,r-g,g-u, v4.5/24px v4-5-train split (554,461)
 PREPROC_CHANNELS = {"color-feat+p99": 9}             # modes that change the channel count (else 5)
 
 
